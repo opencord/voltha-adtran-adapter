@@ -1,0 +1,6 @@
+# virtualenv dirs
+venv-darwin
+venv-linux
+
+# Markdown
+**/*.md
