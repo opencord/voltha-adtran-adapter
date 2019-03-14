@@ -35,6 +35,8 @@ from pyvoltha.adapters.extensions.alarms.adapter_alarms import AdapterAlarms
 from pyvoltha.adapters.extensions.kpi.olt.olt_pm_metrics import OltPmMetrics
 from pyvoltha.common.utils.asleep import asleep
 from flow.flow_tables import DeviceFlows, DownstreamFlows
+from adapters.adtran_olt.net.pio_zmq import DEFAULT_PIO_TCP_PORT
+from adapters.adtran_olt.net.pon_zmq import DEFAULT_PON_AGENT_TCP_PORT
 
 _ = third_party
 
@@ -86,8 +88,6 @@ class AdtranDeviceHandler(object):
     RESTART_RPC = '<system-restart xmlns="urn:ietf:params:xml:ns:yang:ietf-system"/>'
 
     def __init__(self, **kwargs):
-        from net.pio_zmq import DEFAULT_PIO_TCP_PORT
-        from net.pon_zmq import DEFAULT_PON_AGENT_TCP_PORT
 
         super(AdtranDeviceHandler, self).__init__()
 
@@ -158,9 +158,6 @@ class AdtranDeviceHandler(object):
         self.heartbeat_timeout = 5
         self.heartbeat = None
         self.heartbeat_last_reason = ''
-
-        # Virtualized OLT Support
-        self.is_virtual_olt = False
 
         # Installed flows
         self._evcs = {}  # Flow ID/name -> FlowEntry
@@ -233,7 +230,7 @@ class AdtranDeviceHandler(object):
             self.host_and_port = device.host_and_port.split(":")
             self.ip_address = self.host_and_port[0]
             self.netconf_port = int(self.host_and_port[1])
-            self.adapter_agent.update_device(device)
+            self.adapter_agent.device_update(device)
 
         else:
             self.activate_failed(device, 'No IP_address field provided')
@@ -335,14 +332,10 @@ class AdtranDeviceHandler(object):
                 self.parse_provisioning_options(device)
 
                 ############################################################################
-                # Currently, only virtual OLT (pizzabox) is supported
-                # self.is_virtual_olt = Add test for MOCK Device if we want to support it
-
-                ############################################################################
                 # Start initial discovery of NETCONF support (if any)
                 try:
                     device.reason = 'establishing NETCONF connection'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
 
                     self.startup = self.make_netconf_connection()
                     yield self.startup
@@ -355,7 +348,7 @@ class AdtranDeviceHandler(object):
                 # Update access information on network device for full protocol support
                 try:
                     device.reason = 'device networking validation'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     self.startup = self.ready_network_access()
                     yield self.startup
 
@@ -367,7 +360,7 @@ class AdtranDeviceHandler(object):
                 # Restconf setup
                 try:
                     device.reason = 'establishing RESTConf connections'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     self.startup = self.make_restconf_connection()
                     yield self.startup
 
@@ -379,11 +372,11 @@ class AdtranDeviceHandler(object):
                 # Get the device Information
                 if reconciling:
                     device.connect_status = ConnectStatus.REACHABLE
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                 else:
                     try:
                         device.reason = 'retrieving device information'
-                        self.adapter_agent.update_device(device)
+                        yield self.adapter_agent.device_update(device)
                         self.startup = self.get_device_info(device)
                         results = yield self.startup
 
@@ -396,7 +389,7 @@ class AdtranDeviceHandler(object):
                         device.root = True
                         device.vendor = results.get('vendor', 'Adtran Inc.')
                         device.connect_status = ConnectStatus.REACHABLE
-                        self.adapter_agent.update_device(device)
+                        yield self.adapter_agent.device_update(device)
 
                     except Exception as e:
                         self.log.exception('device-info', e=e)
@@ -405,7 +398,7 @@ class AdtranDeviceHandler(object):
                 try:
                     # Enumerate and create Northbound NNI interfaces
                     device.reason = 'enumerating northbound interfaces'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     self.startup = self.enumerate_northbound_ports(device)
                     results = yield self.startup
 
@@ -413,7 +406,7 @@ class AdtranDeviceHandler(object):
                     yield self.startup
 
                     device.reason = 'adding northbound interfaces to adapter'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
 
                     if not reconciling:
                         for port in self.northbound_ports.itervalues():
@@ -426,7 +419,7 @@ class AdtranDeviceHandler(object):
                 try:
                     # Enumerate and create southbound interfaces
                     device.reason = 'enumerating southbound interfaces'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     self.startup = self.enumerate_southbound_ports(device)
                     results = yield self.startup
 
@@ -434,7 +427,7 @@ class AdtranDeviceHandler(object):
                     yield self.startup
 
                     device.reason = 'adding southbound interfaces to adapter'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
 
                     if not reconciling:
                         for port in self.southbound_ports.itervalues():
@@ -471,7 +464,7 @@ class AdtranDeviceHandler(object):
                 if self.pm_metrics is None:
                     try:
                         device.reason = 'setting up Performance Monitoring configuration'
-                        self.adapter_agent.update_device(device)
+                        yield self.adapter_agent.device_update(device)
 
                         kwargs = {
                             'nni-ports': self.northbound_ports.values(),
@@ -483,7 +476,7 @@ class AdtranDeviceHandler(object):
 
                         pm_config = self.pm_metrics.make_proto()
                         self.log.debug("initial-pm-config", pm_config=pm_config)
-                        self.adapter_agent.update_device_pm_config(pm_config, init=True)
+                        yield self.adapter_agent.device_pm_config_update(pm_config, init=True)
 
                     except Exception as e:
                         self.log.exception('pm-setup', e=e)
@@ -493,7 +486,7 @@ class AdtranDeviceHandler(object):
                 # Set the ports in a known good initial state
                 if not reconciling:
                     device.reason = 'setting device to a known initial state'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     try:
                         for port in self.northbound_ports.itervalues():
                             self.startup = yield port.reset()
@@ -509,7 +502,7 @@ class AdtranDeviceHandler(object):
                 # Create logical ports for all southbound and northbound interfaces
                 try:
                     device.reason = 'creating logical ports'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     self.startup = self.create_logical_ports(device, ld_initialized, reconciling)
                     yield self.startup
 
@@ -520,7 +513,7 @@ class AdtranDeviceHandler(object):
                 ############################################################################
                 # Setup Alarm handler
                 device.reason = 'setting up adapter alarms'
-                self.adapter_agent.update_device(device)
+                yield self.adapter_agent.device_update(device)
 
                 self.alarms = AdapterAlarms(self.adapter_agent, device.id, ld_initialized.id)
 
@@ -531,7 +524,7 @@ class AdtranDeviceHandler(object):
                 try:
                     self.log.debug('device-activation-procedures')
                     device.reason = 'performing model specific activation procedures'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     self.startup = self.complete_device_specific_activation(device, reconciling)
                     yield self.startup
 
@@ -547,7 +540,7 @@ class AdtranDeviceHandler(object):
                 device.parent_id = ld_initialized.id
                 device.oper_status = OperStatus.ACTIVE
                 device.reason = ''
-                self.adapter_agent.update_device(device)
+                yield self.adapter_agent.device_update(device)
                 self.logical_device_id = ld_initialized.id
 
                 # Start collecting stats from the device after a brief pause
@@ -567,6 +560,7 @@ class AdtranDeviceHandler(object):
 
         returnValue('activated')
 
+    @inlineCallbacks
     def restart_activate(self, done_deferred, reconciling):
         """
         Startup activation failed, pause a short period of time and retry
@@ -580,18 +574,20 @@ class AdtranDeviceHandler(object):
                 d.cancel()
         except:
             pass
+
         device = self.adapter_agent.get_device(self.device_id)
         device.reason = 'Failed during {}, retrying'.format(device.reason)
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
         self.startup = reactor.callLater(_STARTUP_RETRY_TIMEOUT, self.activate,
                                          done_deferred, reconciling)
-        return 'retrying'
+        returnValue('retrying')
 
     @inlineCallbacks
     def ready_network_access(self):
         # Override in device specific class if needed
         returnValue('nop')
 
+    @inlineCallbacks
     def activate_failed(self, device, reason, reachable=True):
         """
         Activation process (adopt_device) has failed.
@@ -608,7 +604,7 @@ class AdtranDeviceHandler(object):
             device.connect_status = ConnectStatus.UNREACHABLE
 
         device.reason = reason
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
         raise Exception('Failed to activate OLT: {}'.format(device.reason))
 
     @inlineCallbacks
@@ -625,19 +621,11 @@ class AdtranDeviceHandler(object):
         client = self._netconf_client
 
         if client is None:
-            if not self.is_virtual_olt:
-                client = AdtranNetconfClient(self.ip_address,
-                                             self.netconf_port,
-                                             self.netconf_username,
-                                             self.netconf_password,
-                                             self.timeout)
-            else:
-                from python.adapters.adtran.adtran_common.net.mock_netconf_client import MockNetconfClient
-                client = MockNetconfClient(self.ip_address,
-                                           self.netconf_port,
-                                           self.netconf_username,
-                                           self.netconf_password,
-                                           self.timeout)
+            client = AdtranNetconfClient(self.ip_address,
+                                         self.netconf_port,
+                                         self.netconf_username,
+                                         self.netconf_password,
+                                         self.timeout)
         if client.connected:
             self._netconf_client = client
             returnValue(True)
@@ -889,7 +877,7 @@ class AdtranDeviceHandler(object):
         # Get the latest device reference
         device = self.adapter_agent.get_device(self.device_id)
         device.reason = 'Disabling'
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Drop registration for ONU detection
         # self.adapter_agent.unregister_for_onu_detect_state(self.device.id)
@@ -905,7 +893,7 @@ class AdtranDeviceHandler(object):
 
         device.oper_status = OperStatus.UNKNOWN
         device.connect_status = ConnectStatus.UNREACHABLE
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Disable all child devices first
         self.adapter_agent.update_child_devices_state(self.device_id,
@@ -941,7 +929,7 @@ class AdtranDeviceHandler(object):
         self._rest_client = None
 
         device.reason = ''
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
         self.log.info('disabled', device_id=device.id)
         returnValue(None)
 
@@ -972,7 +960,7 @@ class AdtranDeviceHandler(object):
         # Update the connect status to REACHABLE
         device.connect_status = ConnectStatus.REACHABLE
         device.oper_status = OperStatus.ACTIVATING
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Reenable any previously configured southbound ports
         for port in self.southbound_ports.itervalues():
@@ -1015,7 +1003,7 @@ class AdtranDeviceHandler(object):
         self.logical_device_id = ld_initialized.id
 
         # update device active status now
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Reenable all child devices
         self.adapter_agent.update_child_devices_state(device.id,
@@ -1051,14 +1039,12 @@ class AdtranDeviceHandler(object):
         except:
             pass
         # Issue reboot command
+        try:
+            yield self.netconf_client.rpc(AdtranDeviceHandler.RESTART_RPC)
 
-        if not self.is_virtual_olt:
-            try:
-                yield self.netconf_client.rpc(AdtranDeviceHandler.RESTART_RPC)
-
-            except Exception as e:
-                self.log.exception('NETCONF-shutdown', e=e)
-                returnValue(defer.fail(Failure()))
+        except Exception as e:
+            self.log.exception('NETCONF-shutdown', e=e)
+            returnValue(defer.fail(Failure()))
 
         # self.adapter_agent.unregister_for_onu_detect_state(self.device.id)
 
@@ -1070,7 +1056,7 @@ class AdtranDeviceHandler(object):
         previous_conn_status = device.connect_status
         device.oper_status = OperStatus.ACTIVATING
         device.connect_status = ConnectStatus.UNREACHABLE
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Update the child devices connect state to UNREACHABLE
         self.adapter_agent.update_child_devices_state(self.device_id,
@@ -1130,7 +1116,7 @@ class AdtranDeviceHandler(object):
                 finally:
                     self._netconf_client = None
 
-        if (self.netconf_client is None and not self.is_virtual_olt) or self.rest_client is None:
+        if self.netconf_client is None or self.rest_client is None:
             current_time = time.time()
             if current_time < timeout:
                 self.startup = reactor.callLater(5, self._finish_reboot, timeout,
@@ -1138,7 +1124,7 @@ class AdtranDeviceHandler(object):
                                                  previous_conn_status)
                 returnValue(self.startup)
 
-            if self.netconf_client is None and not self.is_virtual_olt:
+            if self.netconf_client is None:
                 self.log.error('NETCONF-restore-failure')
                 pass        # TODO: What is best course of action if cannot get clients back?
 
@@ -1154,7 +1140,7 @@ class AdtranDeviceHandler(object):
         device = self.adapter_agent.get_device(self.device_id)
         device.oper_status = previous_oper_status
         device.connect_status = previous_conn_status
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Update the child devices connect state to REACHABLE
         self.adapter_agent.update_child_devices_state(self.device_id,
@@ -1216,7 +1202,7 @@ class AdtranDeviceHandler(object):
         # Get the latest device reference
         device = self.adapter_agent.get_device(self.device_id)
         device.reason = 'Deleting'
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # self.adapter_agent.unregister_for_onu_detect_state(self.device.id)
 
@@ -1327,6 +1313,7 @@ class AdtranDeviceHandler(object):
         if active and self.netconf_client is None or not self.netconf_client.connected:
             self.make_netconf_connection(close_existing_client=True)
 
+    @inlineCallbacks
     def heartbeat_check_status(self, _):
         """
         Check the number of heartbeat failures against the limit and emit an alarm if needed
@@ -1342,7 +1329,7 @@ class AdtranDeviceHandler(object):
                     device.connect_status = ConnectStatus.UNREACHABLE
                     device.oper_status = OperStatus.FAILED
                     device.reason = self.heartbeat_last_reason
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     HeartbeatAlarm(self.alarms, 'olt', self.heartbeat_miss).raise_alarm()
                     self.on_heatbeat_alarm(True)
             else:
@@ -1351,7 +1338,7 @@ class AdtranDeviceHandler(object):
                     device.connect_status = ConnectStatus.REACHABLE
                     device.oper_status = OperStatus.ACTIVE
                     device.reason = ''
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
                     HeartbeatAlarm(self.alarms, 'olt').clear_alarm()
                     self.on_heatbeat_alarm(False)
 

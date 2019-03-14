@@ -160,9 +160,6 @@ class AdtranOltHandler(AdtranDeviceHandler):
             'startup-revision': 'unknown',
             'software-images': []
         }
-        if self.is_virtual_olt:
-            returnValue(device)
-
         try:
             pe_state = PhysicalEntitiesState(self.netconf_client)
             self.startup = pe_state.get_state()
@@ -322,12 +319,8 @@ class AdtranOltHandler(AdtranDeviceHandler):
             from nni_port import MockNniPort
 
             ietf_interfaces = IetfInterfacesState(self.netconf_client)
-
-            if self.is_virtual_olt:
-                results = MockNniPort.get_nni_port_state_results()
-            else:
-                self.startup = ietf_interfaces.get_state()
-                results = yield self.startup
+            self.startup = ietf_interfaces.get_state()
+            results = yield self.startup
 
             ports = ietf_interfaces.get_port_entries(results, 'ethernet')
             returnValue(ports)
@@ -355,10 +348,9 @@ class AdtranOltHandler(AdtranDeviceHandler):
             # May already exist if device was not fully reachable when first enabled
             if port_no not in self.northbound_ports:
                 self.log.info('processing-nni', port_no=port_no, name=port['port_no'])
-                self.northbound_ports[port_no] = NniPort(self, **port) if not self.is_virtual_olt \
-                    else MockNniPort(self, **port)
+                self.northbound_ports[port_no] = NniPort(self, **port)
 
-            if len(self.northbound_ports) >= self.max_nni_ports: # TODO: For now, limit number of NNI ports to make debugging easier
+            if len(self.northbound_ports) >= self.max_nni_ports:  # TODO: For now, limit number of NNI ports to make debugging easier
                 break
 
         self.num_northbound_ports = len(self.northbound_ports)
@@ -407,12 +399,8 @@ class AdtranOltHandler(AdtranDeviceHandler):
             results = yield self.startup
 
             ietf_interfaces = IetfInterfacesState(self.netconf_client)
-
-            if self.is_virtual_olt:
-                nc_results = MockNniPort.get_pon_port_state_results()
-            else:
-                self.startup = ietf_interfaces.get_state()
-                nc_results = yield self.startup
+            self.startup = ietf_interfaces.get_state()
+            nc_results = yield self.startup
 
             ports = ietf_interfaces.get_port_entries(nc_results, 'xpon')
             if len(ports) == 0:
@@ -692,7 +680,7 @@ class AdtranOltHandler(AdtranDeviceHandler):
         # Upstream direction?
         if self.is_pon_port(port_no):
             #TODO: Validate the evc-map name
-            from python.adapters.adtran.adtran_common.flow.evc_map import EVCMap
+            from pyvoltha.adapters.adtran_common.flow.evc_map import EVCMap
             map_info = EVCMap.decode_evc_map_name(evc_map)
             logical_port_no = int(map_info.get('ingress-port'))
 
@@ -1162,6 +1150,7 @@ class AdtranOltHandler(AdtranDeviceHandler):
 
         self.adapter_agent.update_image_download(request)
 
+    @inlineCallbacks
     def start_download(self, device, request, done):
         """
         This is called to request downloading a specified image into
@@ -1193,7 +1182,7 @@ class AdtranOltHandler(AdtranDeviceHandler):
                 self._downloads[download.name] = download
                 self._update_download_status(request, download)
                 done.callback('started')
-                return done
+                returnValue(done)
 
             except Exception:
                 request.additional_info = 'Download request startup failed due to exception'
@@ -1214,9 +1203,10 @@ class AdtranOltHandler(AdtranDeviceHandler):
 
             # restore admin state to enabled
             device.admin_state = AdminState.ENABLED
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
             raise
 
+    @inlineCallbacks
     def download_status(self, device, request, done):
         """
         This is called to inquire about a requested image download status based
@@ -1241,11 +1231,12 @@ class AdtranOltHandler(AdtranDeviceHandler):
                                  ImageDownload.DOWNLOAD_FAILED]:
             # restore admin state to enabled
             device.admin_state = AdminState.ENABLED
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
 
         done.callback(request.state)
-        return done
+        returnValue(done)
 
+    @inlineCallbacks
     def cancel_download(self, device, request, done):
         """
         This is called to cancel a requested image download based on a NBI
@@ -1273,10 +1264,11 @@ class AdtranOltHandler(AdtranDeviceHandler):
 
         if device.admin_state == AdminState.DOWNLOADING_IMAGE:
             device.admin_state = AdminState.ENABLED
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
 
-        return done
+        returnValue(done)
 
+    @inlineCallbacks
     def activate_image(self, device, request, done):
         """
         This is called to activate a downloaded image from a standby partition
@@ -1306,9 +1298,10 @@ class AdtranOltHandler(AdtranDeviceHandler):
 
         # restore admin state to enabled
         device.admin_state = AdminState.ENABLED
-        self.adapter_agent.update_device(device)
-        return done
+        yield self.adapter_agent.device_update(device)
+        returnValue(done)
 
+    @inlineCallbacks
     def revert_image(self, device, request, done):
         """
         This is called to deactivate the specified image at active partition,
@@ -1338,8 +1331,8 @@ class AdtranOltHandler(AdtranDeviceHandler):
 
         # restore admin state to enabled
         device.admin_state = AdminState.ENABLED
-        self.adapter_agent.update_device(device)
-        return done
+        yield self.adapter_agent.device_update(device)
+        returnValue(done)
 
     def add_onu_device(self, pon_id, onu_id, serial_number):
         onu_device = self.adapter_agent.get_child_device(self.device_id,

@@ -35,7 +35,7 @@ ENV PYTHONPATH=/voltha
 
 COPY pki /voltha/pki/
 
-# Adtran specific
+# Adtran specific (common library and debug support)
 COPY adapters/adtran_common /voltha/adapters/adtran_common
 COPY pydevd /voltha/pydevd
 

@@ -27,3 +27,4 @@ fi
 
 # add top-level voltha dir to pythonpath
 export PYTHONPATH=$VOLTHA_BASE/$VENVDIR/lib/python2.7/site-packages:$PYTHONPATH:$VOLTHA_BASE:$VOLTHA_BASE/cli:$VOLTHA_BASE/protos/third_party
+export PATH=$VOLTHA_BASE/bin:$VOLTHA_BASE/bin/k8s:$PATH

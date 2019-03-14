@@ -212,9 +212,8 @@ class AdtranOnuHandler(object):
             assert device.parent_id, 'Invalid Parent ID'
             assert device.proxy_address.device_id, 'Invalid Device ID'
 
-            # register for proxied messages right away
+            # Cache our proxy address
             self.proxy_address = device.proxy_address
-            self.adapter_agent.register_for_proxied_messages(device.proxy_address)
 
             # initialize device info
             device.root = False
@@ -244,7 +243,7 @@ class AdtranOnuHandler(object):
             parent_device = self.adapter_agent.get_device(device.parent_id)
 
             self.logical_device_id = parent_device.parent_id
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
 
             ############################################################################
             # Setup PM configuration for this device
@@ -260,7 +259,7 @@ class AdtranOnuHandler(object):
             pm_config = self.pm_metrics.make_proto()
             self.openomci.set_pm_config(self.pm_metrics.omci_pm.openomci_interval_pm)
             self.log.info("initial-pm-config", pm_config=pm_config)
-            self.adapter_agent.update_device_pm_config(pm_config, init=True)
+            yield self.adapter_agent.device_pm_config_update(pm_config, init=True)
 
             ############################################################################
             # Setup Alarm handler
@@ -276,8 +275,9 @@ class AdtranOnuHandler(object):
             device.reason = 'Failed to activate: {}'.format(e.message)
             device.connect_status = ConnectStatus.UNREACHABLE
             device.oper_status = OperStatus.FAILED
-            self.adapter_agent.update_device(device)
+            self.adapter_agent.device_update(device)
 
+    @inlineCallbacks
     def reconcile(self, device):
         self.log.info('reconciling-ONU-device-starts')
 
@@ -294,19 +294,15 @@ class AdtranOnuHandler(object):
         # Register for adapter messages
         self.adapter_agent.register_for_inter_adapter_messages()
 
-        # Set the connection status to REACHABLE
-        device.connect_status = ConnectStatus.REACHABLE
-        self.adapter_agent.update_device(device)
-        self.enabled = True
-
         # TODO: Verify that the uni, pon and logical ports exists
+        self.enabled = True
 
         # Mark the device as REACHABLE and ACTIVE
         device = self.adapter_agent.get_device(device.id)
         device.connect_status = ConnectStatus.REACHABLE
         device.oper_status = OperStatus.ACTIVE
         device.reason = ''
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         self.log.info('reconciling-ONU-device-ends')
 
@@ -425,6 +421,7 @@ class AdtranOnuHandler(object):
         downstream = tp['downstream_gem_port_attribute_list']
         self._create_gemports(upstream, downstream, tcont, uni_id, tech_profile_id)
 
+    @inlineCallbacks
     def load_and_configure_tech_profile(self, uni_id, tp_path):
         self.log.debug("loading-tech-profile-configuration", uni_id=uni_id, tp_path=tp_path)
 
@@ -442,7 +439,7 @@ class AdtranOnuHandler(object):
                 if tp_path in self._tp_service_specific_task[uni_id]:
                     self.log.info("tech-profile-config-already-in-progress",
                                   tp_path=tp_path)
-                    return
+                    returnValue('already-in-progress')
 
                 tp = self.kv_client[tp_path]
                 tp = ast.literal_eval(tp)
@@ -455,7 +452,7 @@ class AdtranOnuHandler(object):
                     self.log.info("tech-profile-config-done-successfully")
                     device = self.adapter_agent.get_device(self.device_id)
                     device.reason = ''
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
 
                     if tp_path in self._tp_service_specific_task[uni_id]:
                         del self._tp_service_specific_task[uni_id][tp_path]
@@ -466,7 +463,7 @@ class AdtranOnuHandler(object):
                     self.log.warn('tech-profile-config-failure-retrying', reason=_reason)
                     device = self.adapter_agent.get_device(self.device_id)
                     device.reason = 'Tech Profile config failed-retrying'
-                    self.adapter_agent.update_device(device)
+                    yield self.adapter_agent.device_update(device)
 
                     if tp_path in self._tp_service_specific_task[uni_id]:
                         del self._tp_service_specific_task[uni_id][tp_path]
@@ -601,7 +598,7 @@ class AdtranOnuHandler(object):
         device.oper_status = OperStatus.ACTIVATING
         device.connect_status = ConnectStatus.UNREACHABLE
         device.reason = 'Attempting reboot'
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # TODO: send alert and clear alert after the reboot
         try:
@@ -617,10 +614,10 @@ class AdtranOnuHandler(object):
         # Go ahead and pause less than that and start to look
         # for it being alive
         device.reason = 'reboot in progress'
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         # Disable OpenOMCI
-        self.omci.enabled = False
+        self.openomci.enabled = False
         self._deferred = reactor.callLater(_ONU_REBOOT_MIN,
                                            self._finish_reboot,
                                            previous_oper_status,
@@ -631,13 +628,13 @@ class AdtranOnuHandler(object):
     def _finish_reboot(self, previous_oper_status, previous_conn_status,
                        reregister):
         # Restart OpenOMCI
-        self.omci.enabled = True
+        self.openomci.enabled = True
 
         device = self.adapter_agent.get_device(self.device_id)
         device.oper_status = previous_oper_status
         device.connect_status = previous_conn_status
         device.reason = ''
-        self.adapter_agent.update_device(device)
+        yield self.adapter_agent.device_update(device)
 
         if reregister:
             self.adapter_agent.register_for_inter_adapter_messages()
@@ -655,6 +652,7 @@ class AdtranOnuHandler(object):
         # TODO: Support self test?
         return SelfTestResponse(result=SelfTestResponse.NOT_SUPPORTED)
 
+    @inlineCallbacks
     def disable(self):
         self.log.info('disabling', device_id=self.device_id)
         try:
@@ -668,7 +666,7 @@ class AdtranOnuHandler(object):
             device.oper_status = OperStatus.UNKNOWN
             device.connect_status = ConnectStatus.UNREACHABLE
             device.reason = 'Disabled'
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
 
             # Remove the uni logical port from the OLT, if still present
             parent_device = self.adapter_agent.get_device(device.parent_id)
@@ -702,6 +700,7 @@ class AdtranOnuHandler(object):
         self.enabled = False
         self.log.info('disabled')
 
+    @inlineCallbacks
     def reenable(self):
         self.log.info('re-enabling', device_id=self.device_id)
         try:
@@ -729,7 +728,7 @@ class AdtranOnuHandler(object):
                                                                 self._pon.get_port())
             # Update the connect status to REACHABLE
             device.connect_status = ConnectStatus.REACHABLE
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
 
             # re-add uni port to logical device
             parent_device = self.adapter_agent.get_device(device.parent_id)
@@ -748,7 +747,7 @@ class AdtranOnuHandler(object):
             device.reason = ''
 
             self.enabled = True
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
 
             self.log.info('re-enabled')
 
@@ -773,6 +772,7 @@ class AdtranOnuHandler(object):
         omci, self._openomci = self._openomci, None
         omci.delete()
 
+    @inlineCallbacks
     def add_uni_ports(self):
         """ Called after in-sync achieved and not in xPON mode"""
         # TODO: We have to methods adding UNI ports.  Go to one
@@ -823,7 +823,7 @@ class AdtranOnuHandler(object):
                 pon_port.peers[d[0]].port_no = uni_port.port_number
                 self.adapter_agent.add_port_reference_to_parent(self.device_id,
                                                                 pon_port)
-            self.adapter_agent.update_device(device)
+            yield self.adapter_agent.device_update(device)
             uni_port.enabled = True
             uni_id += 1
 

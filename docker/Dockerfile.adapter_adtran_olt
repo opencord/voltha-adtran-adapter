@@ -21,6 +21,7 @@ MAINTAINER Voltha Community <info@opennetworking.org>
 
 # Adtran specific
 COPY adapters/adtran_olt /voltha/adapters/adtran_olt
+COPY VERSION /voltha
 
 # Exposing process and default entry point
 CMD ["python", "/voltha/adapters/adtran_olt/main.py"]

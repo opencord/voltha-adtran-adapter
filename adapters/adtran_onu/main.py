@@ -45,13 +45,14 @@ from pyvoltha.adapters.kafka.kafka_proxy import KafkaProxy, get_kafka_proxy
 from adtran_onu import AdtranOnuAdapter
 from pyvoltha.protos import third_party
 from pyvoltha.protos.adapter_pb2 import AdapterConfig
+import sys
 
 _ = third_party
 
 
-defs = dict(
-    version_file='./VERSION',
-    config=os.environ.get('CONFIG', './adapters-adtran_onu.yml'),
+defs=dict(
+    version_file='/voltha/VERSION',
+    config=os.environ.get('CONFIG', './adapters-adtran-onu.yml'),
     container_name_regex=os.environ.get('CONTAINER_NUMBER_EXTRACTOR', '^.*\.(['
                                                                       '0-9]+)\..*$'),
     consul=os.environ.get('CONSUL', 'localhost:8500'),
@@ -74,7 +75,7 @@ defs = dict(
     debug_enabled=True,
     debug_host='work.bcsw.net',
     # debug_host='10.0.2.15',
-    debug_port=5678,
+    debug_port=8765,
 )
 
 
@@ -322,42 +323,48 @@ def print_banner(log):
 class Main(object):
 
     def __init__(self):
+        try:
+            self.args = args = parse_args()
+            self.config = load_config(args)
 
-        self.args = args = parse_args()
-        self.config = load_config(args)
+            verbosity_adjust = (args.verbose or 0) - (args.quiet or 0)
+            self.log = setup_logging(self.config.get('logging', {}),
+                                     args.instance_id,
+                                     verbosity_adjust=verbosity_adjust)
+            self.log.info('container-number-extractor',
+                          regex=args.container_name_regex)
 
-        verbosity_adjust = (args.verbose or 0) - (args.quiet or 0)
-        self.log = setup_logging(self.config.get('logging', {}),
-                                 args.instance_id,
-                                 verbosity_adjust=verbosity_adjust)
-        self.log.info('container-number-extractor',
-                      regex=args.container_name_regex)
+            if args.debug_enabled:
+                setup_remote_debug(args.debug_host, args.debug_port, self.log)
 
-        if args.debug_enabled:
-            setup_remote_debug(args.debug_host, args.debug_port, self.log)
+            self.adtran_onu_adapter_version = self.get_version()
+            self.log.info('ADTRAN-ONU-Adapter-Version', version=self.adtran_onu_adapter_version)
 
-        self.adtran_onu_adapter_version = self.get_version()
-        self.log.info('ADTRAN-ONU-Adapter-Version', version=self.adtran_onu_adapter_version)
+            if not args.no_banner:
+                print_banner(self.log)
 
-        if not args.no_banner:
-            print_banner(self.log)
+            self.adapter = None
+            self.core_proxy = None
+            self.adapter_proxy = None
 
-        self.adapter = None
-        self.core_proxy = None
-        self.adapter_proxy = None
+            # Create a unique instance id using the passed-in instance id and
+            # UTC timestamp
+            current_time = arrow.utcnow().timestamp
+            self.instance_id = self.args.instance_id + '_' + str(current_time)
 
-        # Create a unique instance id using the passed-in instance id and
-        # UTC timestamp
-        current_time = arrow.utcnow().timestamp
-        self.instance_id = self.args.instance_id + '_' + str(current_time)
+            self.core_topic = args.core_topic
+            self.listening_topic = args.name
+            self.startup_components()
 
-        self.core_topic = args.core_topic
-        self.listening_topic = args.name
-        self.startup_components()
+            if not args.no_heartbeat:
+                self.start_heartbeat()
+                self.start_kafka_cluster_heartbeat(self.instance_id)
 
-        if not args.no_heartbeat:
-            self.start_heartbeat()
-            self.start_kafka_cluster_heartbeat(self.instance_id)
+        except Exception as e:
+            self.log.exception('unhandled-exception', e=e)
+            for tick in xrange(0, 30):
+                import time
+                time.sleep(2)
 
     def get_version(self):
         path = defs['version_file']

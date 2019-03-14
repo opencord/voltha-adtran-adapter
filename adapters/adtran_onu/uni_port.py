@@ -19,7 +19,8 @@ from pyvoltha.protos.openflow_13_pb2 import OFPPF_10GB_FD
 from pyvoltha.protos.logical_device_pb2 import LogicalPort
 from pyvoltha.protos.openflow_13_pb2 import OFPPS_LIVE, OFPPF_FIBER
 from pyvoltha.protos.openflow_13_pb2 import ofp_port
-import adtran_olt.resources.adtranolt_platform as platform
+# import adtran_olt.resources.adtranolt_platform as platform
+from twisted.internet.defer import inlineCallbacks
 
 
 class UniPort(object):
@@ -136,6 +137,7 @@ class UniPort(object):
         """
         return self._logical_port_number
 
+    @inlineCallbacks
     def _update_adapter_agent(self):
         """
         Update the port status and state in the core
@@ -147,14 +149,16 @@ class UniPort(object):
             self._port.admin_state = self._admin_state
             self._port.oper_status = self._oper_status
 
-        try:
-            # adapter_agent add_port also does an update of existing port
-            self._handler.adapter_agent.add_port(self._handler.device_id,
-                                                 self.get_port())
-        except KeyError:  # Expected exception during ONU disabling
-            pass
-        except Exception as e:  # Expected exception during ONU disabling
-            self.log.exception('update-port', e=e)
+            try:
+                yield self._handler.adapter_agent.port_state_update(self._handler.device_id,
+                                                                    self._port.type,
+                                                                    self._port.port_no,
+                                                                    self._port.oper_status)
+
+            except KeyError:  # Expected exception during ONU disabling
+                pass
+            except Exception as e:  # Expected exception during ONU disabling
+                self.log.exception('update-port', e=e)
 
     def get_port(self):
         """

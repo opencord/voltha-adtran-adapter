@@ -150,6 +150,7 @@ class PonPort(object):
                                                    port_no=device.parent_port_no)])
         return self._port
 
+    @inlineCallbacks
     def _update_adapter_agent(self):
         """
         Update the port status and state in the core
@@ -161,11 +162,13 @@ class PonPort(object):
             self._port.admin_state = self._admin_state
             self._port.oper_status = self._oper_status
 
-        # adapter_agent add_port also does an update of port status
-        try:
-            self._handler.adapter_agent.add_port(self._handler.device_id, self.get_port())
-        except Exception as e:
-            self.log.exception('update-port', e=e)
+            try:
+                yield self._handler.adapter_agent.port_state_update(self._handler.device_id,
+                                                                    self._port.type,
+                                                                    self._port.port_no,
+                                                                    self._port.oper_status)
+            except Exception as e:
+                self.log.exception('update-port', e=e)
 
     def add_tcont(self, tcont, reflow=False):
         """

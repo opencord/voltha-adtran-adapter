@@ -43,18 +43,19 @@ DOCKER_BUILD_ARGS = \
 	 --rm --force-rm \
 	$(DOCKER_BUILD_EXTRA_ARGS)
 
-VENVDIR := venv-$(shell uname -s | tr '[:upper:]' '[:lower:]')
-VENV_BIN ?= virtualenv
-VENV_OPTS ?=
-
-PYVOLTHA_DIR ?= ../pyvoltha
-
 DOCKER_IMAGE_LIST = \
 	voltha-adtran-base \
-	voltha-adapter-adtran-onu \
 	voltha-adapter-adtran-olt
+	# voltha-adapter-adtran-onu \
 
-.PHONY: base adtran_olt adtran_onu tag push pull
+VENVDIR := venv-$(shell uname -s | tr '[:upper:]' '[:lower:]')
+VENV_BIN ?= virtualenv
+VENV_OPTS ?= -v
+
+PYVOLTHA_DIR ?= ../pyvoltha
+VOLTHA_PROTO_DIR ?= ../voltha-protos
+
+.PHONY: $(DIRS) $(DIRS_CLEAN) base adtran_olt adtran_onu tag push pull
 
 # This should to be the first and default target in this Makefile
 help:
@@ -65,9 +66,8 @@ help:
                     If this is the first time you are building, choose \"make build\" option."
 	@echo "clean              : Remove files created by the build and tests"
 	@echo "distclean          : Remove venv directory"
-	@echo "fetch              : Pre-fetch artifacts for subsequent local builds"
 	@echo "help               : Print this help"
-	@echo "rebuild-venv       : Rebuild local Python virtualenv from scratch"
+	@echo "rebuild-venv       : Rebuild local Pythozn virtualenv from scratch"
 	@echo "venv               : Build local Python virtualenv if did not exist yet"
 	@echo "containers         : Build all the docker containers"
 	@echo "base               : Build the base docker container used by all other dockers"
@@ -80,13 +80,17 @@ help:
 
 build: containers
 
-containers: base adapter_adtran_olt adapter_adtran_onu
+# containers: base adapter_adtran_olt adapter_adtran_onu olt_only onu_only
+containers: base adapter_adtran_olt olt_only
 
 base:
 ifdef LOCAL_PYVOLTHA
 	@rm -f pyvoltha/dist/*
 	@mkdir -p pyvoltha/dist
 	cp $(PYVOLTHA_DIR)/dist/*.tar.gz pyvoltha/dist/
+	@rm -f voltha-protos/*
+	mkdir -p voltha-protos/dist
+	cp $(VOLTHA_PROTO_DIR)/dist/*.tar.gz voltha-protos/dist/
 	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adtran-base-local:${TAG} -f docker/Dockerfile.base_local .
 else
 	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adtran-base:${TAG} -f docker/Dockerfile.base .
@@ -100,6 +104,20 @@ else
 endif
 
 adapter_adtran_onu: base
+ifdef PYVOLTHA_BASE_IMAGE
+	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adapter-adtran-onu:${TAG} -f docker/Dockerfile.adapter_adtran_onu_pyvoltha .
+else
+	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adapter-adtran-onu:${TAG} -f docker/Dockerfile.adapter_adtran_onu .
+endif
+
+olt_only: base
+ifdef PYVOLTHA_BASE_IMAGE
+	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adapter-adtran-olt:${TAG} -f docker/Dockerfile.adapter_adtran_olt_pyvoltha .
+else
+	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adapter-adtran-olt:${TAG} -f docker/Dockerfile.adapter_adtran_olt .
+endif
+
+onu_only:
 ifdef PYVOLTHA_BASE_IMAGE
 	docker build $(DOCKER_BUILD_ARGS) -t ${REGISTRY}${REPOSITORY}voltha-adapter-adtran-onu:${TAG} -f docker/Dockerfile.adapter_adtran_onu_pyvoltha .
 else
@@ -122,8 +140,9 @@ pull: $(patsubst  %,%.pull,$(DOCKER_IMAGE_LIST))
 	docker pull ${REGISTRY}${REPOSITORY}voltha-$(subst .pull,,$@):${TAG}
 
 clean:
-	find . -name '*.pyc' | xargs rm -f
 	rm -rf pyvoltha
+	rm -rf voltha-protos
+	find . -name '*.pyc' | xargs rm -f
 
 distclean: clean
 	rm -rf ${VENVDIR}
@@ -151,9 +170,12 @@ ${VENVDIR}/.built:
 
 ifdef LOCAL_PYVOLTHA
 	mkdir -p pyvoltha/dist
-	cp ../../pyvoltha/dist/*.tar.gz pyvoltha/dist/
+	cp $(PYVOLTHA_DIR)/dist/*.tar.gz pyvoltha/dist/
+	mkdir -p voltha-protos/dist
+	cp $(VOLTHA_PROTO_DIR)/dist/*.tar.gz voltha-protos/dist/
 	@ . ${VENVDIR}/bin/activate && \
-	    pip install pyvoltha/dist/*.tar.gz
+	    pip install pyvoltha/dist/*.tar.gz && \
+	    pip install voltha-protos/dist/*.tar.gz
 endif
 
 # end file

@@ -49,9 +49,9 @@ from pyvoltha.protos.adapter_pb2 import AdapterConfig
 _ = third_party
 
 
-defs = dict(
-    version_file='./VERSION',
-    config=os.environ.get('CONFIG', './adapters-adtran_olt.yml'),
+defs=dict(
+    version_file='/voltha/VERSION',
+    config=os.environ.get('CONFIG', './adapters-adtran-olt.yml'),
     container_name_regex=os.environ.get('CONTAINER_NUMBER_EXTRACTOR', '^.*\.(['
                                                                       '0-9]+)\..*$'),
     consul=os.environ.get('CONSUL', 'localhost:8500'),
@@ -64,8 +64,8 @@ defs = dict(
     core_topic=os.environ.get('CORE_TOPIC', 'rwcore'),
     interface=os.environ.get('INTERFACE', get_my_primary_interface()),
     instance_id=os.environ.get('INSTANCE_ID', os.environ.get('HOSTNAME', '1')),
-    kafka_adapter=os.environ.get('KAFKA_ADAPTER', '172.20.10.3:9092'),
-    kafka_cluster=os.environ.get('KAFKA_CLUSTER', '172.20.10.3:9092'),
+    kafka_adapter=os.environ.get('KAFKA_ADAPTER', '192.168.0.20:9092'),
+    kafka_cluster=os.environ.get('KAFKA_CLUSTER', '10.100.198.220:9092'),
     backend=os.environ.get('BACKEND', 'none'),
     retry_interval=os.environ.get('RETRY_INTERVAL', 2),
     heartbeat_topic=os.environ.get('HEARTBEAT_TOPIC', "adapters.heartbeat"),
@@ -74,7 +74,7 @@ defs = dict(
     debug_enabled=True,
     debug_host='work.bcsw.net',
     # debug_host='10.0.2.15',
-    debug_port=8765,
+    debug_port=5678,
 )
 
 
@@ -286,7 +286,7 @@ def setup_remote_debug(host, port, logger):
     except:
         import sys
         logger.error("pydevd startup exception: %s" % sys.exc_info()[0])
-        print('REMOTE DEBUGGING will not be supported in this run...')
+        logger.error('REMOTE DEBUGGING will not be supported in this run...')
 
 
 def load_config(args):
@@ -295,6 +295,7 @@ def load_config(args):
         dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(dir, path)
     path = os.path.abspath(path)
+
     with open(path) as fd:
         config = yaml.load(fd)
     return config
@@ -308,6 +309,7 @@ def print_banner(log):
     log.info("  / ____ \| |__| | | |  | | \ \  / ____ \| |\  |   | |__| | |____| |   ")
     log.info(" /_/    \_\_____/  |_|  |_| _\_\/_/    \_\_| \_|    \____/|______|_|   ")
     log.info("     /\      | |           | |                                         ")
+    log.info('   _       _             _                            ')
     log.info("    /  \   __| | __ _ _ __ | |_ ___ _ __                               ")
     log.info("   / /\ \ / _` |/ _` | '_ \| __/ _ \ '__|                              ")
     log.info("  / ____ \ (_| | (_| | |_) | ||  __/ |                                 ")
@@ -322,42 +324,45 @@ def print_banner(log):
 class Main(object):
 
     def __init__(self):
+        try:
+            self.args = args = parse_args()
+            self.config = load_config(args)
 
-        self.args = args = parse_args()
-        self.config = load_config(args)
+            verbosity_adjust = (args.verbose or 0) - (args.quiet or 0)
+            self.log = setup_logging(self.config.get('logging', {}),
+                                     args.instance_id,
+                                     verbosity_adjust=verbosity_adjust)
+            self.log.info('container-number-extractor',
+                          regex=args.container_name_regex)
 
-        verbosity_adjust = (args.verbose or 0) - (args.quiet or 0)
-        self.log = setup_logging(self.config.get('logging', {}),
-                                 args.instance_id,
-                                 verbosity_adjust=verbosity_adjust)
-        self.log.info('container-number-extractor',
-                      regex=args.container_name_regex)
+            if args.debug_enabled:
+                setup_remote_debug(args.debug_host, args.debug_port, self.log)
 
-        if args.debug_enabled:
-            setup_remote_debug(args.debug_host, args.debug_port, self.log)
+            self.adtran_olt_adapter_version = self.get_version()
+            self.log.info('ADTRAN-OLT-Adapter-Version',
+                          version=self.adtran_olt_adapter_version)
 
-        self.adtran_olt_adapter_version = self.get_version()
-        self.log.info('ADTRAN-OLT-Adapter-Version', version=self.adtran_olt_adapter_version)
+            if not args.no_banner:
+                print_banner(self.log)
 
-        if not args.no_banner:
-            print_banner(self.log)
+            self.adapter = None
 
-        self.adapter = None
-        self.core_proxy = None
-        self.adapter_proxy = None
+            # Create a unique instance id using the passed-in instance id and
+            # UTC timestamp
+            current_time = arrow.utcnow().timestamp
+            self.instance_id = self.args.instance_id + '_' + str(current_time)
 
-        # Create a unique instance id using the passed-in instance id and
-        # UTC timestamp
-        current_time = arrow.utcnow().timestamp
-        self.instance_id = self.args.instance_id + '_' + str(current_time)
+            self.core_topic = args.core_topic
+            self.listening_topic = args.name
+            self.startup_components()
 
-        self.core_topic = args.core_topic
-        self.listening_topic = args.name
-        self.startup_components()
+            if not args.no_heartbeat:
+                self.start_heartbeat()
+                self.start_kafka_cluster_heartbeat(self.instance_id)
 
-        if not args.no_heartbeat:
-            self.start_heartbeat()
-            self.start_kafka_cluster_heartbeat(self.instance_id)
+        except Exception as e:
+            self.log.exception('unhandled-exception', e=e)
+            raise
 
     def get_version(self):
         path = defs['version_file']
@@ -442,6 +447,7 @@ class Main(object):
                     kv_store=self.args.backend,
                     default_topic=self.args.name,
                     group_id_prefix=self.args.instance_id,
+                    # Needs to assign a real class
                     target_cls=adtran_request_handler
                 )
             ).start()
@@ -543,8 +549,8 @@ class Main(object):
                     kafka_cluster_proxy.send_message(topic, dumps(message))
                 else:
                     self.log.error('kafka-proxy-unavailable')
-            except Exception, err:
-                self.log.exception('failed-sending-message-heartbeat', e=err)
+            except Exception as e:
+                self.log.exception('failed-sending-message-heartbeat', e=e)
 
         try:
             t0 = time.time()

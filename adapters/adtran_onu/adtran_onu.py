@@ -61,7 +61,7 @@ class AdtranOnuAdapter(OnuAdapter):
         self.adtran_omci['omci-capabilities']['tasks']['get-capabilities'] = AdtnCapabilitiesTask
         # TODO: Continue to customize adtran_omci here as needed
 
-        self._omci_agent = OpenOMCIAgent(self.adapter_agent.core,
+        self._omci_agent = OpenOMCIAgent(self.adapter_agent,
                                          support_classes=self.adtran_omci)
 
     @property

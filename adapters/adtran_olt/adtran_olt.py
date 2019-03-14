@@ -22,7 +22,7 @@ from twisted.internet import reactor, defer
 from pyvoltha.adapters.iadapter import OltAdapter
 from pyvoltha.protos import third_party
 from pyvoltha.protos.common_pb2 import AdminState
-
+from pyvoltha.protos.health_pb2 import HealthStatus
 from adtran_olt_handler import AdtranOltHandler
 
 
@@ -43,7 +43,7 @@ class AdtranOltAdapter(OltAdapter):
                                                version='2.0.0',
                                                device_type=AdtranOltAdapter.name,
                                                accepts_bulk_flow_update=True,
-                                               accepts_add_remove_flow_updates=False)  # TODO: Implement me
+                                               accepts_add_remove_flow_updates=True)
 
         log.debug('adtran_olt.__init__')
 
@@ -55,7 +55,6 @@ class AdtranOltAdapter(OltAdapter):
         """
         # TODO: Currently this is always healthy for every adapter.
         #       If we decide not to modify this, delete this method and use base class method
-        from pyvoltha.protos.health_pb2 import HealthStatus
         return HealthStatus(state=HealthStatus.HEALTHY)
 
     def abandon_device(self, device):
@@ -75,8 +74,9 @@ class AdtranOltAdapter(OltAdapter):
         is provisioned top-down and needs to be activated by the adapter.
 
         :param device: A voltha.Device object, with possible device-type
-                specific extensions. Such extensions shall be described as part of
-                the device type specification returned by device_types().
+                       specific extensions. Such extensions shall be described as part of
+                       the device type specification returned by device_types().
+
         :return: (Deferred) Shall be fired to acknowledge device ownership.
         """
         log.info('adopt-device', device=device)
@@ -84,23 +84,36 @@ class AdtranOltAdapter(OltAdapter):
             'adapter': self,
             'device-id': device.id
         }
-        self.devices_handlers[device.id] = self.device_handler_class(**kwargs)
-        d = defer.Deferred()
-        reactor.callLater(0, self.devices_handlers[device.id].activate, d, False)
-        return d
+        try:
+            self.devices_handlers[device.id] = self.device_handler_class(**kwargs)
+            d = defer.Deferred()
+            reactor.callLater(0, self.devices_handlers[device.id].activate, d, False)
+            return d
+
+        except Exception as _e:
+            raise
 
     def reconcile_device(self, device):
+        """
+        Make sure the adapter looks after given device. Called when this
+        device has changed ownership from another Voltha instance to
+        this one (typically, this occurs when the previous voltha
+        instance went down).
+
+        :param device: A voltha.Device object, with possible device-type
+                       specific extensions. Such extensions shall be described as part of
+                       the device type specification returned by device_types().
+
+        :return: (Deferred) Shall be fired to acknowledge device ownership.
+        """
         try:
-            self.devices_handlers[device.id] = self.device_handler_class(self,
-                                                                         device.id)
+            kwargs = {
+                'adapter': self,
+                'device-id': device.id
+            }
+            self.devices_handlers[device.id] = self.device_handler_class(**kwargs)
             # Work only required for devices that are in ENABLED state
             if device.admin_state == AdminState.ENABLED:
-
-                kwargs = {
-                    'adapter': self,
-                    'device-id': device.id
-                }
-                self.devices_handlers[device.id] =self.device_handler_class(**kwargs)
                 d = defer.Deferred()
                 reactor.callLater(0, self.devices_handlers[device.id].activate, d, True)
 

@@ -245,7 +245,7 @@ class AdtranOltResourceMgr(object):
             # we need to derive the ONU Id for which the packet arrived based
             # on the pon_intf and gemport available in the packet_indication
             # self.kv_store[str(pon_intf_gemport)] = ' '.join(map(str, (onu_id, uni_id)))
-            self.kv_store.put(self._make_path(str(pon_intf_gemport)), ' '.join(map(str, (onu_id, uni_id)))
+            self.kv_store.put(self._make_path(str(pon_intf_gemport)), ' '.join(map(str, (onu_id, uni_id))))
 
     def get_onu_uni_from_ponport_gemport(self, pon_port, gemport):
         pon_intf_gemport = (pon_port, gemport)

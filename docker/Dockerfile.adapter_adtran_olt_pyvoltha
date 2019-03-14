@@ -19,8 +19,11 @@ FROM ${REGISTRY}${REPOSITORY}voltha-adtran-base-local:${TAG}
 
 MAINTAINER Voltha Community <info@opennetworking.org>
 
+ENV PYTHONPATH=/voltha
+
 # Adtran specific
 COPY adapters/adtran_olt /voltha/adapters/adtran_olt
+COPY VERSION /voltha
 
 # Exposing process and default entry point
 CMD ["python", "/voltha/adapters/adtran_olt/main.py"]
