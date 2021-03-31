@@ -1,4 +1,4 @@
-lxml==3.6.4
+lxml==4.6.3
 ncclient==0.5.3
 packaging==17.1
 pyvoltha==0.1.7
